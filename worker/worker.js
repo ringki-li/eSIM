@@ -95,8 +95,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     <label class="block text-gray-700 text-sm font-bold mb-2">手机号码 (选填)</label>
                     <input type="text" id="simNumber" placeholder="例如：+1 234 567 8900" class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
                 </div>
+                <div class="mb-4">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">保号周期 (单位：天，必填)</label>
+                    <input type="number" id="simCycle" required placeholder="例如：180" class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
+                </div>
                 <div class="mb-6">
-                    <label class="block text-gray-700 text-sm font-bold mb-2">到期日期 (必填)</label>
+                    <label class="block text-gray-700 text-sm font-bold mb-2">本次到期日 (必填)</label>
                     <input type="date" id="simExpire" required class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
                 </div>
                 <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-colors">
@@ -191,13 +195,20 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
                 const cardHTML = \`
                     <div class="glass-card rounded-2xl p-6 relative overflow-hidden group">
+                        
+                        <!-- 一键续期按钮 (Hover时显示) -->
+                        <button onclick="renewEsim('\${sim.id}', \${sim.cycle || 0})" class="absolute top-4 right-14 text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 w-8 h-8 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100 z-10" title="一键续期（按周期顺延）">
+                            <i class="fa-solid fa-rotate-right text-sm"></i>
+                        </button>
+
+                        <!-- 删除按钮 (Hover时显示) -->
                         <button onclick="deleteEsim('\${sim.id}')" class="absolute top-4 right-4 text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 w-8 h-8 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100 z-10" title="删除号码">
                             <i class="fa-solid fa-trash-can text-sm"></i>
                         </button>
 
-                        <div class="flex justify-between items-start mb-4 pr-6">
+                        <div class="flex justify-between items-start mb-4 pr-16">
                             <div>
-                                <h2 class="text-xl font-bold text-gray-900 truncate max-w-[160px] md:max-w-[180px]">\${sim.name}</h2>
+                                <h2 class="text-xl font-bold text-gray-900 truncate max-w-[150px] md:max-w-[170px]">\${sim.name}</h2>
                                 <p class="text-gray-600 font-mono mt-1 text-sm"><i class="fa-solid fa-phone-alt mr-1 text-gray-400"></i>\${sim.number || '未登记号码'}</p>
                             </div>
                             <span class="px-3 py-1 rounded-full text-xs font-bold shadow-sm whitespace-nowrap \${badgeClass}">
@@ -213,7 +224,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
                             <div class="w-full bg-gray-200/60 rounded-full h-3 mb-2 shadow-inner">
                                 <div class="\${statusColor} h-3 rounded-full shadow-sm transition-all duration-1000" style="width: \${percent}%"></div>
                             </div>
-                            <p class="text-xs text-gray-500 text-right mt-1">到期日: \${sim.expireDate}</p>
+                            <div class="flex justify-between text-xs text-gray-500 mt-2 font-medium">
+                                <span><i class="fa-solid fa-arrows-rotate mr-1"></i>周期: \${sim.cycle || '-'} 天</span>
+                                <span>到期日: \${sim.expireDate}</span>
+                            </div>
                         </div>
                     </div>
                 \`;
@@ -254,6 +268,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             const payload = {
                 name: document.getElementById('simName').value,
                 number: document.getElementById('simNumber').value,
+                cycle: parseInt(document.getElementById('simCycle').value) || 0,
                 expireDate: document.getElementById('simExpire').value
             };
 
@@ -275,6 +290,39 @@ const HTML_CONTENT = `<!DOCTYPE html>
             } finally {
                 btn.innerHTML = '保存并监控';
                 btn.disabled = false;
+            }
+        }
+
+        // 一键续期功能
+        async function renewEsim(id, cycle) {
+            if (!cycle || cycle === 0) {
+                alert("该卡片未设置保号周期，无法自动计算日期。请删除后重新添加。");
+                return;
+            }
+            if (!confirm("确定已保号并一键续期吗？\\n\\n系统将以【今天】为基准，往后顺延 " + cycle + " 天作为新的到期日。")) return;
+            
+            // 计算基于今天的新日期
+            const newDate = new Date();
+            newDate.setDate(newDate.getDate() + parseInt(cycle));
+            const year = newDate.getFullYear();
+            const month = String(newDate.getMonth() + 1).padStart(2, '0');
+            const day = String(newDate.getDate()).padStart(2, '0');
+            const newExpireStr = year + '-' + month + '-' + day;
+
+            try {
+                const response = await fetch(WORKER_API_URL, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id, expireDate: newExpireStr })
+                });
+                
+                if (response.ok) {
+                    await fetchEsimData(); 
+                } else {
+                    alert("续期失败。");
+                }
+            } catch (error) {
+                alert("网络错误，续期失败。");
             }
         }
 
@@ -340,10 +388,9 @@ export default {
 
     // 路由 2：如果访问的是 API 接口 (/api/esims)，则处理数据库数据
     if (path === "/api/esims") {
-      // 允许跨域（虽然现在同域名不需要跨域了，但保留更稳妥）
       const corsHeaders = {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       };
 
@@ -351,7 +398,6 @@ export default {
         return new Response(null, { headers: corsHeaders });
       }
 
-      // 获取 KV 数据
       let esims;
       try {
         esims = await env.ESIM_DB.get("esim_list", { type: "json" });
@@ -360,14 +406,12 @@ export default {
         return new Response(JSON.stringify({ error: "KV 未绑定" }), { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } });
       }
 
-      // GET：读取数据
       if (request.method === "GET") {
         return new Response(JSON.stringify(esims), {
           headers: { "Content-Type": "application/json", ...corsHeaders }
         });
       }
 
-      // POST：新增号码
       if (request.method === "POST") {
         try {
           const newSim = await request.json();
@@ -383,7 +427,30 @@ export default {
         }
       }
 
-      // DELETE：删除号码
+      // 新增 [PUT] 方法，用于处理一键续期
+      if (request.method === "PUT") {
+        try {
+          const { id, expireDate } = await request.json();
+          let found = false;
+          esims = esims.map(sim => {
+            if (sim.id === id) {
+              found = true;
+              return { ...sim, expireDate }; // 只更新到期日期
+            }
+            return sim;
+          });
+
+          if (!found) {
+            return new Response(JSON.stringify({ success: false, message: "未找到记录" }), { status: 404, headers: corsHeaders });
+          }
+
+          await env.ESIM_DB.put("esim_list", JSON.stringify(esims)); 
+          return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+        } catch (err) {
+          return new Response(JSON.stringify({ success: false }), { status: 400, headers: corsHeaders });
+        }
+      }
+
       if (request.method === "DELETE") {
         try {
           const { id } = await request.json();
@@ -396,11 +463,10 @@ export default {
       }
     }
 
-    // 路由 3：其他未定义的路径，返回 404
     return new Response("404 Not Found", { status: 404 });
   },
 
-  // 定时任务逻辑 (保持不变，每天推送 TG 提醒)
+  // 定时任务逻辑 (新增了周期数据显示在 TG 提醒中)
   async scheduled(event, env, ctx) {
     const esims = await env.ESIM_DB.get("esim_list", { type: "json" });
     if (!esims || esims.length === 0) return; 
@@ -418,9 +484,12 @@ export default {
       
       const diffTime = expDate - localToday;
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      // 显示保号周期文字
+      const cycleText = sim.cycle ? `${sim.cycle}天` : '未设置';
 
       if (diffDays <= 15 && diffDays > 0) {
-        messages.push(`⚠️ 【eSIM 保号提醒】\n📱 卡名: ${sim.name}\n📞 号码: ${sim.number || '未填写'}\n📅 到期: ${sim.expireDate}\n⏳ 剩余: ${diffDays} 天！\n👉 请尽快处理！`);
+        messages.push(`⚠️ 【eSIM 保号提醒】\n📱 卡名: ${sim.name}\n📞 号码: ${sim.number || '未填写'}\n🔄 周期: ${cycleText}\n📅 到期: ${sim.expireDate}\n⏳ 剩余: ${diffDays} 天！\n👉 请尽快处理续期！`);
       } else if (diffDays === 0) {
         messages.push(`🚨 【eSIM 紧急提醒】\n📱 卡名: ${sim.name} 今天到期！`);
       } else if (diffDays < 0 && Math.abs(diffDays) % 7 === 0) {
